@@ -1,34 +1,14 @@
-
 import http from 'k6/http';
 import { check } from 'k6';
 import { Counter } from 'k6/metrics';
+import { scenario } from 'k6/execution';
 
 const successfulRequests = new Counter('successful_requests');
 const failedRequests = new Counter('failed_requests');
 
-export const options = {
-    scenarios: {
-        social_api_load: {
-            executor: 'constant-vus',
-            vus: 5,
-            duration: '2m',
-            gracefulStop: '30s'
-        }
-    },
-
-    thresholds: {
-        dropped_iterations: ['count==0']
-    }
-};
-
-// API Configuration
 const URL = 'https://social-qa.netomi.com/v1/webhook';
-
-const BOT_REFERENCE_ID =
-    'a21d4252-7396-4784-81f0-1d0bb4bba8e7';
-
-const USER_ID =
-    'a6018160-6e33-11f1-99a5-cfdaee32bd44';
+const BOT_REFERENCE_ID = 'a21d4252-7396-4784-81f0-1d0bb4bba8e7';
+const USER_ID = 'a6018160-6e33-11f1-99a5-cfdaee32bd44';
 
 const HEADERS = {
     'Content-Type': 'application/json',
@@ -43,43 +23,54 @@ const USER_QUERIES = JSON.parse(open('./user_queries.json')).user_queries;
 
 const RUN_ID = Date.now();
 
+export const options = {
+    scenarios: {
+        social_api_load: {
+            executor: 'constant-arrival-rate',
+            rate: 25,
+            timeUnit: '1s',
+            duration: '10m',
+            preAllocatedVUs: 20,
+            maxVUs: 100,
+            gracefulStop: '30s'
+        }
+    },
+    thresholds: {
+        dropped_iterations: ['count==0']
+    }
+};
+
 export default function () {
+    // Global iteration across all VUs so all queries are picked in sequence
+    const globalIteration = scenario.iterationInTest;
 
-    // Generate unique identifiers across VUs and iterations
-    const id = `${RUN_ID}_${__VU}_${__ITER}`;
-
-    const conversationId =
-        `2026-11-16-${String(__VU).padStart(4, '0')}-${String(__ITER).padStart(8, '0')}`;
-
-    // Select queries sequentially; the single VU increments __ITER once per request
-    const queryIndex = __ITER % USER_QUERIES.length;
-
+    // Pick every query one by one and repeat after exhausting the list
+    const queryIndex = globalIteration % USER_QUERIES.length;
     const selectedQuery = USER_QUERIES[queryIndex];
 
-    // Prepare CHAT webhook payload
+    // Unique identifiers across all requests
+    const id = `${RUN_ID}_${__VU}_${__ITER}_${globalIteration}`;
+    const conversationId = `${RUN_ID}-${__VU}-${__ITER}-${globalIteration}`;
+
     const payload = {
         conversationId: conversationId,
-
         ownerType: 'BOT',
-
         messagePayload: {
             text: selectedQuery,
             label: '',
             messageId: id,
             timestamp: Date.now()
         },
-
         userDetails: {
             userId: USER_ID,
             emailId: ''
         },
-
         additionalAttributes: {
             CUSTOM_ATTRIBUTES: [
                 {
                     type: 'TEXT',
                     name: 'widget_id',
-                    value: null,
+                    value: 'load-test-widget',
                     scope: 'LIFE_TIME'
                 },
                 {
@@ -122,20 +113,13 @@ export default function () {
         }
     };
 
-    // Trigger CHAT webhook
-    const response = http.post(
-        URL,
-        JSON.stringify(payload),
-        {
-            headers: HEADERS,
-            timeout: '60s'
-        }
-    );
+    const response = http.post(URL, JSON.stringify(payload), {
+        headers: HEADERS,
+        timeout: '60s'
+    });
 
-    // Validate response
     const passed = check(response, {
-        'HTTP status is 2xx': (r) =>
-            r.status >= 200 && r.status < 300
+        'HTTP status is 2xx': (r) => r.status >= 200 && r.status < 300
     });
 
     if (passed) {
@@ -144,7 +128,7 @@ export default function () {
         failedRequests.add(1);
 
         console.error(
-            `FAILED | VU: ${__VU} | Conversation: ${conversationId} | Query: ${selectedQuery} | Status: ${response.status} | Body: ${response.body}`
+            `FAILED | VU: ${__VU} | GlobalIter: ${globalIteration} | Conversation: ${conversationId} | Query: ${selectedQuery} | Status: ${response.status} | Body: ${response.body}`
         );
     }
 }
