@@ -10,7 +10,7 @@ export const options = {
     scenarios: {
         social_api_load: {
             executor: 'constant-vus',
-            vus: 1,
+            vus: 5,
             duration: '2m',
             gracefulStop: '30s'
         }
